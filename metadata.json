@@ -1,0 +1,9 @@
+{
+  "name": "Crypto Price",
+  "description": "Display BTC and ETH prices from Binance in the top panel.",
+  "uuid": "crypto-price@kaeose.me",
+  "shell-version": [
+    "43",
+    "44"
+  ]
+}
