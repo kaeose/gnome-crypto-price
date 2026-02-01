@@ -258,6 +258,9 @@ class CryptoPriceExtension {
     }
 
     enable() {
+        this._intervalItems = new Map();
+        this._intervalDots = new Map();
+
         this._indicator = new PanelMenu.Button(0.0, this.metadata.name, false);
 
         this._box = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
