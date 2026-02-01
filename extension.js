@@ -166,12 +166,13 @@ class ChartWidget {
         const yMin = chartHeight - ((min - visibleMin) / range) * chartHeight;
         drawYLabel(min, yMin, [1, 0.4, 0.4, 0.9]); // Light Reddish
 
-        // 3. Middle Price (Average)
-        const mid = (max + min) / 2;
-        const yMid = chartHeight - ((mid - visibleMin) / range) * chartHeight;
-        // Only draw mid if it doesn't overlap too much with max or min
-        if (Math.abs(yMid - yMax) > 15 && Math.abs(yMid - yMin) > 15) {
-             drawYLabel(mid, yMid, [1, 1, 1, 0.7]);
+        // 3. Current Price (Latest Close)
+        const current = candles.length > 0 ? candles[candles.length - 1].close : (max + min) / 2;
+        const yCurrent = chartHeight - ((current - visibleMin) / range) * chartHeight;
+        
+        // Only draw current price if it doesn't overlap too much with max or min
+        if (Math.abs(yCurrent - yMax) > 15 && Math.abs(yCurrent - yMin) > 15) {
+             drawYLabel(current, yCurrent, [1, 1, 1, 0.9]); // Brighter white for current price
         }
 
         // --- Draw Candles ---
@@ -261,7 +262,7 @@ class CryptoPriceExtension {
         this._intervalItems = new Map();
         this._intervalDots = new Map();
 
-        this._indicator = new PanelMenu.Button(0.0, this.metadata.name, false);
+        this._indicator = new PanelMenu.Button(0.5, this.metadata.name, false);
 
         this._box = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
         
@@ -274,7 +275,7 @@ class CryptoPriceExtension {
         this._box.add_child(this._label);
         this._indicator.add_child(this._box);
 
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
+        Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
 
         this._soupSession = new Soup.Session();
 
