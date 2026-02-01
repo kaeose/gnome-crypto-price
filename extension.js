@@ -286,7 +286,7 @@ class CryptoPriceExtension {
 
         _setupMenu() {
             // Interval Tabs
-            const tabItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            const tabItem = new PopupMenu.PopupMenuSection();
             const tabBox = new St.BoxLayout({
                 vertical: true,
                 x_expand: true,
@@ -360,7 +360,7 @@ class CryptoPriceExtension {
     
             // BTC Chart
             this._btcChart = new ChartWidget(`BTC/USDT (${this._currentInterval})`);
-            const btcItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            const btcItem = new PopupMenu.PopupMenuSection();
             btcItem.actor.add_child(this._btcChart.widget);
             this._indicator.menu.addMenuItem(btcItem);
     
@@ -368,7 +368,7 @@ class CryptoPriceExtension {
     
             // ETH Chart
             this._ethChart = new ChartWidget(`ETH/USDT (${this._currentInterval})`);
-            const ethItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            const ethItem = new PopupMenu.PopupMenuSection();
             ethItem.actor.add_child(this._ethChart.widget);
             this._indicator.menu.addMenuItem(ethItem);
     
