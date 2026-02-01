@@ -44,10 +44,19 @@ class ChartWidget {
         this.drawingArea.set_content(this.canvas);
         
         this._data = [];
+        this._interval = '1m';
 
         this.canvas.connect('draw', (canvas, cr, width, height) => {
             this._drawContent(cr, width, height);
         });
+    }
+
+    setTitle(title) {
+        this.titleLabel.set_text(title);
+    }
+
+    setInterval(interval) {
+        this._interval = interval;
     }
 
     setData(data) {
@@ -57,9 +66,19 @@ class ChartWidget {
 
     _formatTime(timestamp) {
         const date = new Date(timestamp);
-        const hours = date.getHours().toString().padStart(2, '0');
-        const minutes = date.getMinutes().toString().padStart(2, '0');
-        return `${hours}:${minutes}`;
+        const M = (date.getMonth() + 1).toString().padStart(2, '0');
+        const D = date.getDate().toString().padStart(2, '0');
+        const h = date.getHours().toString().padStart(2, '0');
+        const m = date.getMinutes().toString().padStart(2, '0');
+        const yy = date.getFullYear().toString().slice(-2);
+
+        if (['1m', '5m', '15m', '30m'].includes(this._interval)) {
+            return `${h}:${m}`;
+        } else if (['1h', '4h'].includes(this._interval)) {
+            return `${M}-${D} ${h}:${m}`;
+        } else {
+            return `${yy}-${M}-${D}`;
+        }
     }
 
     _drawContent(cr, width, height) {
@@ -68,6 +87,12 @@ class ChartWidget {
         cr.setOperator(Cairo.Operator.OVER);
 
         if (!this._data || this._data.length === 0) {
+            cr.setSourceRGBA(1, 1, 1, 0.5);
+            cr.setFontSize(14);
+            const text = "Loading...";
+            const extents = cr.textExtents(text);
+            cr.moveTo((width - extents.width) / 2, (height + extents.height) / 2);
+            cr.showText(text);
             return;
         }
 
@@ -227,6 +252,9 @@ class CryptoPriceExtension {
         this._menuSignal = null;
         this._btcChart = null;
         this._ethChart = null;
+        this._currentInterval = '1m';
+        this._intervalItems = new Map();
+        this._intervalDots = new Map();
     }
 
     enable() {
@@ -252,27 +280,123 @@ class CryptoPriceExtension {
         this._updatePrices();
     }
 
-    _setupMenu() {
-        // BTC Chart
-        this._btcChart = new ChartWidget('BTC/USDT (1m)');
-        const btcItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
-        btcItem.actor.add_child(this._btcChart.widget);
-        this._indicator.menu.addMenuItem(btcItem);
+        _setupMenu() {
+            // Interval Tabs
+            const tabItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            const tabBox = new St.BoxLayout({
+                vertical: true,
+                x_expand: true,
+                style: 'padding: 10px; spacing: 6px;'
+            });
+            tabItem.actor.add_child(tabBox);
+            this._indicator.menu.addMenuItem(tabItem);
+    
+            const intervals = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M'];
+            
+            for (let i = 0; i < intervals.length; i += 5) {
+                const row = new St.BoxLayout({ x_expand: true, style: 'spacing: 6px;' });
+                const rowIntervals = intervals.slice(i, i + 5);
+                
+                rowIntervals.forEach(interval => {
+                    const btn = new St.Button({
+                        x_expand: true,
+                        can_focus: true,
+                        style_class: 'button'
+                    });
 
-        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+                    const btnContent = new St.BoxLayout({
+                        x_align: Clutter.ActorAlign.CENTER,
+                        y_align: Clutter.ActorAlign.CENTER
+                    });
 
-        // ETH Chart
-        this._ethChart = new ChartWidget('ETH/USDT (1m)');
-        const ethItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
-        ethItem.actor.add_child(this._ethChart.widget);
-        this._indicator.menu.addMenuItem(ethItem);
+                    const label = new St.Label({
+                        text: interval,
+                        y_align: Clutter.ActorAlign.CENTER
+                    });
 
-        // Fetch on open
-        this._menuSignal = this._indicator.menu.connect('open-state-changed', (menu, open) => {
-            if (open) {
-                this._updateCharts();
+                    const dot = new St.Widget({
+                        width: 6,
+                        height: 6,
+                        visible: false,
+                        style: 'background-color: #2ec27e; border-radius: 99px; margin-left: 4px; margin-bottom: 2px; vertical-align: middle;',
+                        y_align: Clutter.ActorAlign.CENTER
+                    });
+
+                    btnContent.add_child(label);
+                    btnContent.add_child(dot);
+                    btn.set_child(btnContent);
+    
+                    btn.connect('clicked', () => {
+                        this._currentInterval = interval;
+                        this._updateTabStyles();
+                        this._updateChartTitles();
+    
+                        if (this._klineCache && this._klineCache[interval]) {
+                            if (this._btcChart) this._btcChart.setData(this._klineCache[interval].btc);
+                            if (this._ethChart) this._ethChart.setData(this._klineCache[interval].eth);
+                        } else {
+                            if (this._btcChart) this._btcChart.setData([]);
+                            if (this._ethChart) this._ethChart.setData([]);
+                        }
+
+                        this._updateCharts();
+                    });
+    
+                    this._intervalItems.set(interval, btn);
+                    this._intervalDots.set(interval, dot);
+                    row.add_child(btn);
+                });
+                tabBox.add_child(row);
             }
-        });
+    
+            // Set initial styles
+            this._updateTabStyles();
+    
+            this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    
+            // BTC Chart
+            this._btcChart = new ChartWidget(`BTC/USDT (${this._currentInterval})`);
+            const btcItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            btcItem.actor.add_child(this._btcChart.widget);
+            this._indicator.menu.addMenuItem(btcItem);
+    
+            this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    
+            // ETH Chart
+            this._ethChart = new ChartWidget(`ETH/USDT (${this._currentInterval})`);
+            const ethItem = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+            ethItem.actor.add_child(this._ethChart.widget);
+            this._indicator.menu.addMenuItem(ethItem);
+    
+            // Fetch on open
+            this._menuSignal = this._indicator.menu.connect('open-state-changed', (menu, open) => {
+                if (open) {
+                    this._updateCharts();
+                }
+            });
+        }
+    
+        _updateTabStyles() {
+            const ACTIVE_STYLE = 'padding: 4px 0; border-radius: 6px; background-color: #3584e4; color: white; font-weight: bold; border: 1px solid rgba(0,0,0,0.2);';
+            const INACTIVE_STYLE = 'padding: 4px 0; border-radius: 6px; background-color: rgba(255, 255, 255, 0.1); color: #eee; font-weight: normal; border: 1px solid transparent;';
+    
+            this._intervalItems.forEach((btn, interval) => {
+                if (interval === this._currentInterval) {
+                    btn.set_style(ACTIVE_STYLE);
+                } else {
+                    btn.set_style(INACTIVE_STYLE);
+                }
+            });
+        }
+    _updateChartTitles() {
+        if (this._btcChart) {
+            this._btcChart.setTitle(`BTC/USDT (${this._currentInterval})`);
+            this._btcChart.setInterval(this._currentInterval);
+        }
+        if (this._ethChart) {
+            this._ethChart.setTitle(`ETH/USDT (${this._currentInterval})`);
+            this._ethChart.setInterval(this._currentInterval);
+        }
     }
 
     disable() {
@@ -300,6 +424,10 @@ class CryptoPriceExtension {
         this._label = null;
         this._btcChart = null;
         this._ethChart = null;
+        this._intervalItems.clear();
+        this._intervalItems = null;
+        this._intervalDots.clear();
+        this._intervalDots = null;
     }
 
     async _fetchPrice(symbol) {
@@ -324,8 +452,8 @@ class CryptoPriceExtension {
         });
     }
 
-    async _fetchKlines(symbol) {
-        const url = `${BINANCE_KLINE_URL}?symbol=${symbol}&interval=1m&limit=60`;
+    async _fetchKlines(symbol, interval) {
+        const url = `${BINANCE_KLINE_URL}?symbol=${symbol}&interval=${interval}&limit=60`;
         const message = Soup.Message.new('GET', url);
         
         return new Promise((resolve, reject) => {
@@ -378,16 +506,28 @@ class CryptoPriceExtension {
     }
 
     async _updateCharts() {
+        const interval = this._currentInterval;
+        const dot = this._intervalDots ? this._intervalDots.get(interval) : null;
+        
+        if (dot) dot.show();
+
         try {
             const [btcData, ethData] = await Promise.all([
-                this._fetchKlines('BTCUSDT'),
-                this._fetchKlines('ETHUSDT')
+                this._fetchKlines('BTCUSDT', interval),
+                this._fetchKlines('ETHUSDT', interval)
             ]);
 
-            if (this._btcChart) this._btcChart.setData(btcData);
-            if (this._ethChart) this._ethChart.setData(ethData);
+            if (!this._klineCache) this._klineCache = {};
+            this._klineCache[interval] = { btc: btcData, eth: ethData };
+
+            if (this._currentInterval === interval) {
+                if (this._btcChart) this._btcChart.setData(btcData);
+                if (this._ethChart) this._ethChart.setData(ethData);
+            }
         } catch (e) {
             global.log(`[CryptoPrice] Chart Error: ${e.message}`);
+        } finally {
+            if (dot) dot.hide();
         }
     }
 }
