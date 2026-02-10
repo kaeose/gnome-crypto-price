@@ -26,28 +26,58 @@ class ChartWidget {
 
         this.titleLabel = new St.Label({
             text: title,
-            style: 'font-weight: bold; margin-bottom: 5px;'
+            style: 'font-weight: bold; margin-bottom: 2px;'
         });
         this.widget.add_child(this.titleLabel);
 
+        this.detailsLabel = new St.Label({
+            text: ' ',
+            style: 'font-size: 10px; color: #ccc; margin-bottom: 5px; font-family: monospace;'
+        });
+        this.widget.add_child(this.detailsLabel);
+
+        // Constants
+        this.WIDTH = 360;
+        this.HEIGHT = 170;
+        this.RIGHT_MARGIN = 60;
+        this.BOTTOM_MARGIN = 20;
+
         // Drawing area container
-        // Increased width to 360 to accommodate Y-axis labels
         this.drawingArea = new St.Widget({
-            width: 360,
-            height: 170, 
-            style: 'background-color: rgba(0,0,0,0.3); border-radius: 4px;'
+            width: this.WIDTH,
+            height: this.HEIGHT, 
+            style: 'background-color: rgba(0,0,0,0.3); border-radius: 4px;',
+            reactive: true
         });
         this.widget.add_child(this.drawingArea);
 
         this.canvas = new Clutter.Canvas();
-        this.canvas.set_size(360, 170);
+        this.canvas.set_size(this.WIDTH, this.HEIGHT);
         this.drawingArea.set_content(this.canvas);
         
         this._data = [];
+        this._candles = [];
+        this._min = 0;
+        this._max = 0;
+        this._maxVol = 0;
         this._interval = '1m';
+        this._hoverIndex = -1;
 
         this.canvas.connect('draw', (canvas, cr, width, height) => {
             this._drawContent(cr, width, height);
+        });
+
+        this.drawingArea.connect('motion-event', (actor, event) => {
+            this._handleMotion(event);
+            return Clutter.EVENT_PROPAGATE;
+        });
+
+        this.drawingArea.connect('leave-event', () => {
+            if (this._onHoverCallback) {
+                this._onHoverCallback(-1);
+            } else {
+                this.setHover(-1);
+            }
         });
     }
 
@@ -61,16 +91,116 @@ class ChartWidget {
 
     setData(data) {
         this._data = data;
+        this._processData();
         this.canvas.invalidate();
     }
 
-    _formatTime(timestamp) {
+    _processData() {
+        if (!this._data || this._data.length === 0) {
+            this._candles = [];
+            return;
+        }
+
+        let min = Infinity;
+        let max = -Infinity;
+        let maxVol = 0;
+
+        this._candles = this._data.map(d => {
+            const time = d[0];
+            const open = parseFloat(d[1]);
+            const high = parseFloat(d[2]);
+            const low = parseFloat(d[3]);
+            const close = parseFloat(d[4]);
+            const vol = parseFloat(d[5]);
+
+            if (low < min) min = low;
+            if (high > max) max = high;
+            if (vol > maxVol) maxVol = vol;
+
+            return { time, open, high, low, close, vol };
+        });
+
+        this._min = min;
+        this._max = max;
+        this._maxVol = maxVol;
+    }
+
+    setOnHover(callback) {
+        this._onHoverCallback = callback;
+    }
+
+    setHover(index) {
+        if (this._hoverIndex === index) return;
+        
+        this._hoverIndex = index;
+        
+        if (index === -1 || !this._candles || index >= this._candles.length) {
+            this.detailsLabel.set_text(' ');
+            this.canvas.invalidate();
+            return;
+        }
+
+        const c = this._candles[index];
+        let timeStr = this._formatTime(c.time, true);
+        
+        // Hide time for daily or longer intervals
+        if (['1d', '1w', '1M'].includes(this._interval)) {
+            timeStr = timeStr.split(' ')[0]; // Take only the date part
+        }
+
+        // Format numbers for display
+        const fmt = (n) => n > 1000 ? n.toFixed(1) : n.toFixed(2);
+        const volFmt = (n) => {
+            if (n >= 1000000) return (n/1000000).toFixed(2) + 'M';
+            if (n >= 1000) return (n/1000).toFixed(2) + 'K';
+            return n.toFixed(2);
+        };
+
+        const changePct = ((c.close - c.open) / c.open * 100).toFixed(2);
+        const rangePct = ((c.high - c.low) / c.low * 100).toFixed(2);
+        const sign = c.close >= c.open ? '+' : '';
+
+        const txt = `${timeStr} | C:${fmt(c.close)} (${sign}${changePct}%) [${rangePct}%] V:${volFmt(c.vol)}`;
+        this.detailsLabel.set_text(txt);
+        this.canvas.invalidate();
+    }
+
+    _handleMotion(event) {
+        if (!this._candles || this._candles.length === 0) return;
+
+        const [x, y] = event.get_coords();
+        const [success, localX, localY] = this.drawingArea.transform_stage_point(x, y);
+
+        if (!success) return;
+
+        const chartWidth = this.WIDTH - this.RIGHT_MARGIN;
+        if (localX > chartWidth) return; // Mouse over Y-axis labels
+
+        const count = this._candles.length;
+        const candleWidth = chartWidth / count;
+        
+        let index = Math.floor(localX / candleWidth);
+        if (index < 0) index = 0;
+        if (index >= count) index = count - 1;
+
+        if (this._onHoverCallback) {
+            this._onHoverCallback(index);
+        } else {
+            this.setHover(index);
+        }
+    }
+
+    _formatTime(timestamp, detailed = false) {
         const date = new Date(timestamp);
         const M = (date.getMonth() + 1).toString().padStart(2, '0');
         const D = date.getDate().toString().padStart(2, '0');
         const h = date.getHours().toString().padStart(2, '0');
         const m = date.getMinutes().toString().padStart(2, '0');
         const yy = date.getFullYear().toString().slice(-2);
+
+        if (detailed) {
+             return `${yy}-${M}-${D} ${h}:${m}`;
+        }
 
         if (['1m', '5m', '15m', '30m'].includes(this._interval)) {
             return `${h}:${m}`;
@@ -86,7 +216,7 @@ class ChartWidget {
         cr.paint();
         cr.setOperator(Cairo.Operator.OVER);
 
-        if (!this._data || this._data.length === 0) {
+        if (!this._candles || this._candles.length === 0) {
             cr.setSourceRGBA(1, 1, 1, 0.5);
             cr.setFontSize(14);
             const text = "Loading...";
@@ -96,28 +226,12 @@ class ChartWidget {
             return;
         }
 
-        const BOTTOM_MARGIN = 20; // For X-axis timestamps
-        const RIGHT_MARGIN = 60;  // For Y-axis prices
+        const chartHeight = height - this.BOTTOM_MARGIN;
+        const chartWidth = width - this.RIGHT_MARGIN;
         
-        const chartHeight = height - BOTTOM_MARGIN;
-        const chartWidth = width - RIGHT_MARGIN;
-
-        // Parse data
-        let min = Infinity;
-        let max = -Infinity;
-        
-        const candles = this._data.map(d => {
-            const time = d[0];
-            const open = parseFloat(d[1]);
-            const high = parseFloat(d[2]);
-            const low = parseFloat(d[3]);
-            const close = parseFloat(d[4]);
-            
-            if (low < min) min = low;
-            if (high > max) max = high;
-            
-            return { time, open, high, low, close };
-        });
+        const min = this._min;
+        const max = this._max;
+        const maxVol = this._maxVol;
 
         // Add padding to range
         const paddingRange = (max - min) * 0.1;
@@ -148,13 +262,11 @@ class ChartWidget {
 
             // Text
             cr.setSourceRGBA(...color);
-            // Simple formatting: remove trailing zeros if possible, keep precision
             let text = priceVal.toFixed(2); 
-            // If price is large (like BTC > 1000), maybe remove decimals or keep 1
             if (priceVal > 1000) text = priceVal.toFixed(0); 
             else if (priceVal > 1) text = priceVal.toFixed(2);
 
-            cr.moveTo(chartWidth + 5, yPos + 4); // +5 padding, +4 to center vertically
+            cr.moveTo(chartWidth + 5, yPos + 4); 
             cr.showText(text);
         };
 
@@ -167,37 +279,52 @@ class ChartWidget {
         drawYLabel(min, yMin, [1, 0.4, 0.4, 0.9]); // Light Reddish
 
         // 3. Current Price (Latest Close)
-        const current = candles.length > 0 ? candles[candles.length - 1].close : (max + min) / 2;
+        const current = this._candles[this._candles.length - 1].close;
         const yCurrent = chartHeight - ((current - visibleMin) / range) * chartHeight;
         
-        // Only draw current price if it doesn't overlap too much with max or min
         if (Math.abs(yCurrent - yMax) > 15 && Math.abs(yCurrent - yMin) > 15) {
-             drawYLabel(current, yCurrent, [1, 1, 1, 0.9]); // Brighter white for current price
+             drawYLabel(current, yCurrent, [1, 1, 1, 0.9]);
         }
 
-        // --- Draw Candles ---
-        const count = candles.length;
+        // --- Draw Candles & Volume ---
+        const count = this._candles.length;
         const candleWidth = chartWidth / count;
         const spacing = 2;
         const barWidth = Math.max(1, candleWidth - spacing);
 
-        cr.setLineWidth(1);
-
-        candles.forEach((c, i) => {
+        this._candles.forEach((c, i) => {
             const x = i * candleWidth + spacing / 2;
             const centerX = x + barWidth / 2;
+            const isUp = c.close >= c.open;
 
+            // --- Draw Volume ---
+            if (maxVol > 0) {
+                const volHeight = (c.vol / maxVol) * (chartHeight * 0.2); 
+                const volY = chartHeight - volHeight;
+                
+                if (isUp) {
+                    cr.setSourceRGBA(0, 1, 0, 0.3); 
+                } else {
+                    cr.setSourceRGBA(1, 0, 0, 0.3); 
+                }
+                
+                cr.rectangle(x, volY, barWidth, volHeight);
+                cr.fill();
+            }
+
+            // --- Draw Candle ---
             const yHigh = chartHeight - ((c.high - visibleMin) / range) * chartHeight;
             const yLow = chartHeight - ((c.low - visibleMin) / range) * chartHeight;
             const yOpen = chartHeight - ((c.open - visibleMin) / range) * chartHeight;
             const yClose = chartHeight - ((c.close - visibleMin) / range) * chartHeight;
 
-            const isUp = c.close >= c.open;
             if (isUp) {
-                cr.setSourceRGBA(0, 1, 0, 1); // Green
+                cr.setSourceRGBA(0, 1, 0, 1); 
             } else {
-                cr.setSourceRGBA(1, 0, 0, 1); // Red
+                cr.setSourceRGBA(1, 0, 0, 1); 
             }
+
+            cr.setLineWidth(1);
 
             // Wick
             cr.moveTo(centerX, yHigh);
@@ -213,26 +340,46 @@ class ChartWidget {
             cr.fill();
         });
 
+        // --- Draw Crosshair ---
+        if (this._hoverIndex >= 0 && this._hoverIndex < this._candles.length) {
+            const c = this._candles[this._hoverIndex];
+            const x = this._hoverIndex * candleWidth + spacing / 2;
+            const centerX = x + barWidth / 2;
+            const yClose = chartHeight - ((c.close - visibleMin) / range) * chartHeight;
+
+            cr.setLineWidth(1);
+            cr.setSourceRGBA(1, 1, 1, 0.4); 
+            
+            // Vertical line
+            cr.setDash([4, 4], 0);
+            cr.moveTo(centerX, 0);
+            cr.lineTo(centerX, chartHeight);
+            cr.stroke();
+
+            // Horizontal line (at Close price)
+            cr.setDash([], 0); 
+            cr.moveTo(0, yClose);
+            cr.lineTo(chartWidth, yClose);
+            cr.stroke();
+        }
+
         // --- Draw X-Axis Time Labels ---
-        if (candles.length > 0) {
-            const startTime = this._formatTime(candles[0].time);
-            const endTime = this._formatTime(candles[candles.length - 1].time);
+        if (this._candles.length > 0) {
+            const startTime = this._formatTime(this._candles[0].time);
+            const endTime = this._formatTime(this._candles[this._candles.length - 1].time);
 
             cr.setSourceRGBA(1, 1, 1, 0.8);
             cr.setFontSize(11);
 
-            // Draw Start Time
             cr.moveTo(5, height - 5);
             cr.showText(startTime);
 
-            // Draw End Time
-            // Align with the end of the chart area, not the full canvas width
             const extents = cr.textExtents(endTime);
             cr.moveTo(chartWidth - extents.width - 5, height - 5);
             cr.showText(endTime);
         }
         
-        // Vertical separator line between chart and labels
+        // Vertical separator line
         cr.setSourceRGBA(1, 1, 1, 0.2);
         cr.setLineWidth(1);
         cr.moveTo(chartWidth, 0);
@@ -371,6 +518,14 @@ class CryptoPriceExtension {
             const ethItem = new PopupMenu.PopupMenuSection();
             ethItem.actor.add_child(this._ethChart.widget);
             this._indicator.menu.addMenuItem(ethItem);
+
+            // Synchronize Hover
+            const sharedHover = (index) => {
+                if (this._btcChart) this._btcChart.setHover(index);
+                if (this._ethChart) this._ethChart.setHover(index);
+            };
+            this._btcChart.setOnHover(sharedHover);
+            this._ethChart.setOnHover(sharedHover);
     
             // Fetch on open
             this._menuSignal = this._indicator.menu.connect('open-state-changed', (menu, open) => {
